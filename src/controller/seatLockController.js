@@ -1,9 +1,10 @@
 import mongoose from "mongoose";
 import SeatLock from "../model/SeatLock.js";
-import Showtime from "../model/showtime.js";
+import Showtime from "../model/Showtime.js";
 import Booking from "../model/Booking.js";
 import Cinema from "../model/Cinema.js";
 import CinemaSystem from "../model/CinemaSystem.js";
+import Combo from "../model/Combo.js";
 
 // =======================================================
 // ✅ GIỮ GHẾ (LOCK SEATS)
@@ -40,7 +41,8 @@ export const lockSeats = async (req, res) => {
       });
     }
 
-    const seatData = Array.isArray(showtime.seatData) ? showtime.seatData : [];
+    // Dùng đúng field seats theo schema
+    const seatData = Array.isArray(showtime.seats) ? showtime.seats : [];
 
     // --- Xác định ghế đã bị chiếm hoặc bán
     const occupiedSeats = new Set(
@@ -49,7 +51,7 @@ export const lockSeats = async (req, res) => {
           (s) =>
             s &&
             seatNumbers.includes(s.seatNumber) &&
-            ["occupied", "sold"].includes(s.status)
+            ["occupied", "sold", "reserved"].includes(s.status)
         )
         .map((s) => s.seatNumber)
     );
@@ -294,9 +296,24 @@ export const confirmBooking = async (req, res) => {
 
     await newBooking.save();
 
-    // ✅ Cập nhật trạng thái lock
-    seatLock.isActive = false;
+    // ✅ Cập nhật trạng thái ghế trong Showtime thành "locked" (giống hành vi quay lại Payment)
+    const showtime = await Showtime.findById(seatLock.showtimeId);
+    if (showtime) {
+      const seatsArray = Array.isArray(showtime.seats) ? showtime.seats : [];
+      showtime.seats = seatsArray.map((seat) => {
+        if (seatLock.seatNumbers.includes(seat.seatNumber)) {
+          seat.status = "locked";
+        }
+        return seat;
+      });
+      // Không trừ availableSeats khi chỉ giữ ghế
+      await showtime.save();
+    }
+
+    // ✅ Gia hạn khóa ghế sau khi thanh toán thành công (để tiếp tục bị khóa)
+    seatLock.isActive = true;
     seatLock.status = "confirmed";
+    seatLock.expiresAt = new Date(Date.now() + 10 * 60 * 1000); // +10 phút
     await seatLock.save();
 
     return res.status(200).json({
